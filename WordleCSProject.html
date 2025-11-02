@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wordle Attempts</title>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --text:#e6eef8;
+      --tile-w:56px; --gap:8px;
+      --green:#538d4e; --yellow:#b59f3b; --gray:#39414a;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;}
+    body{
+      margin:0; font-family:Inter, system-ui, Arial; background:linear-gradient(180deg,#071526 0%, #081726 100%); color:var(--text);
+      display:flex; align-items:center; justify-content:center; padding:24px;
+    }
+    .app{
+      width:100%; max-width:720px; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border-radius:12px; padding:20px; box-shadow:0 8px 30px rgba(2,6,23,0.6);
+    }
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px}
+    h1{font-size:20px; margin:0}
+    .controls{display:flex; gap:8px; align-items:center}
+    label{font-size:13px; opacity:0.9}
+    input[type=number]{width:64px;padding:6px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text)}
+    button{background:#0ea5b1;border:none;padding:8px 12px;border-radius:8px;color:#042022;font-weight:600;cursor:pointer}
+    main{margin-top:18px; display:flex; gap:20px}
+    .board{flex:1}
+    .grid{display:grid; grid-template-rows: repeat(6, var(--tile-w)); gap:var(--gap)}
+    .row{display:flex; gap:var(--gap)}
+    .tile{
+      width:var(--tile-w); height:var(--tile-w); border-radius:8px; display:flex; align-items:center; justify-content:center;
+      font-weight:700; font-size:22px; text-transform:uppercase; background:rgba(255,255,255,0.02); border:2px solid rgba(255,255,255,0.04);
+    }
+    .tile.filled{border-color:rgba(255,255,255,0.1)}
+    .tile.correct{background:var(--green); border-color:var(--green); color:white}
+    .tile.present{background:var(--yellow); border-color:var(--yellow); color:white}
+    .tile.absent{background:var(--gray); border-color:var(--gray); color:white}
+    .side{width:220px}
+    .status{background:rgba(255,255,255,0.02); border-radius:8px; padding:12px; font-size:14px}
+    .keyboard{margin-top:12px; display:flex; flex-direction:column; gap:8px}
+    .km-row{display:flex; gap:6px}
+    .kkey{padding:10px 12px; border-radius:6px; min-width:36px; text-align:center; cursor:pointer; user-select:none; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.03)}
+    .kkey.wide{min-width:64px}
+    footer{margin-top:14px; font-size:13px; opacity:0.8}
+    .toast{position:fixed; left:50%; transform:translateX(-50%); bottom:28px; background:#0b1220; padding:10px 14px; border-radius:9px; box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+    @media (max-width:720px){
+      main{flex-direction:column}
+      .side{width:100%}
+    }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Wordle">
+    <header>
+      <h1>Wordle</h1>
+      <div class="controls">
+        <label for="attempts">Attempts:</label>
+        <input id="attempts" type="number" min="1" max="10" value="6" aria-label="Number of attempts">
+        <button id="newGame">New Game</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="board">
+        <div id="grid" class="grid" aria-live="polite"></div>
+        <div class="keyboard" id="keyboard" aria-hidden="false"></div>
+      </section>
+
+      <aside class="side">
+        <div class="status">
+          <div><strong>Attempts left:</strong> <span id="attemptsLeft">6</span></div>
+          <div style="margin-top:6px"><strong>Guess length:</strong> <span id="wordLen">5</span></div>
+          <div style="margin-top:8px" id="message">Type a 5-letter guess and press Enter.</div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button id="reveal">Reveal</button>
+          <button id="share">Copy Result</button>
+        </div>
+        <footer>
+          <div style="margin-top:10px">This is an offline Wordle clone. The word is randomly chosen from the built-in list.</div>
+        </footer>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <script>
+    // --- Minimal 5-letter word list for demo; expand this for more variety ---
+    const WORDS = [
+      'about','other','which','their','there','first','could','house','plant','party',
+      'write','sound','great','found','small','world','young','thing','paper','right',
+      'apple','grace','shiny','blend','cabin','zesty','faint','slope','track','weird'
+    ];
+
+    // UI elements
+    const gridEl = document.getElementById('grid');
+    const keyboardEl = document.getElementById('keyboard');
+    const attemptsInput = document.getElementById('attempts');
+    const attemptsLeftEl = document.getElementById('attemptsLeft');
+    const messageEl = document.getElementById('message');
+    const wordLenEl = document.getElementById('wordLen');
+    const newGameBtn = document.getElementById('newGame');
+    const revealBtn = document.getElementById('reveal');
+    const shareBtn = document.getElementById('share');
+    const toastEl = document.getElementById('toast');
+
+    let solution = '';
+    let maxAttempts = parseInt(attemptsInput.value,10) || 6;
+    let attempts = 0;
+    const WORD_LENGTH = 5;
+
+    // state: array of guesses (strings)
+    let guesses = [];
+
+    function pickRandomWord(){
+      // pick a 5-letter word from WORDS
+      const filtered = WORDS.filter(w => w.length === WORD_LENGTH);
+      return filtered[Math.floor(Math.random()*filtered.length)];
+    }
+
+    function createGrid(){
+      gridEl.innerHTML = '';
+      // create maxAttempts rows
+      for(let r=0;r<maxAttempts;r++){
+        const row = document.createElement('div'); row.className='row';
+        row.setAttribute('data-row', r);
+        for(let c=0;c<WORD_LENGTH;c++){
+          const t = document.createElement('div'); t.className='tile'; t.textContent='';
+          t.setAttribute('data-col', c);
+          row.appendChild(t);
+        }
+        gridEl.appendChild(row);
+      }
+    }
+
+    function createKeyboard(){
+      keyboardEl.innerHTML = '';
+      const rows = ['qwertyuiop','asdfghjkl','zxcvbnm'];
+      rows.forEach((keys,ri)=>{
+        const r = document.createElement('div'); r.className='km-row';
+        for(const k of keys){
+          const btn = document.createElement('div'); btn.className='kkey'; btn.textContent=k;
+          btn.tabIndex=0; btn.dataset.key=k;
+          btn.addEventListener('click', ()=> handleKey(k));
+          r.appendChild(btn);
+        }
+        if(ri===2){
+          // add Enter and Backspace
+          const enter = document.createElement('div'); enter.className='kkey wide'; enter.textContent='Enter'; enter.dataset.key='Enter'; enter.addEventListener('click', ()=>handleKey('Enter'));
+          const back = document.createElement('div'); back.className='kkey wide'; back.textContent='Back'; back.dataset.key='Backspace'; back.addEventListener('click', ()=>handleKey('Backspace'));
+          r.insertBefore(enter, r.firstChild);
+          r.appendChild(back);
+        }
+        keyboardEl.appendChild(r);
+      });
+    }
+
+    function showToast(msg, ms=1800){
+      toastEl.textContent=msg; toastEl.style.display='block';
+      setTimeout(()=>{ toastEl.style.display='none'; }, ms);
+    }
+
+    function updateAttemptsLeft(){
+      attemptsLeftEl.textContent = Math.max(0, maxAttempts - attempts);
+    }
+
+    function showMessage(msg){ messageEl.textContent = msg; }
+
+    function handleKey(key){
+      if(attempts >= maxAttempts) return; // game over
+      key = key.toLowerCase();
+      const row = gridEl.querySelector(`[data-row='${attempts}']`);
+      if(!row) return;
+      const tiles = Array.from(row.children);
+      const filled = tiles.filter(t => t.textContent.trim()!== '').length;
+
+      if(key === 'enter'){
+        // only submit when row filled
+        if(filled < WORD_LENGTH){ showToast('Not enough letters'); return; }
+        const guess = tiles.map(t=>t.textContent).join('').toLowerCase();
+        if(!/^[a-z]{5}$/.test(guess)){ showToast('Invalid guess'); return; }
+        processGuess(guess, tiles);
+      } else if(key === 'backspace'){
+        if(filled === 0) return;
+        tiles[filled-1].textContent = '';
+        tiles[filled-1].classList.remove('filled');
+      } else if(/^[a-z]$/.test(key)){
+        if(filled >= WORD_LENGTH) return;
+        tiles[filled].textContent = key.toUpperCase();
+        tiles[filled].classList.add('filled');
+      }
+    }
+
+    function processGuess(guess, tiles){
+      // simple validity: check presence in word list (optional)
+      // evaluate letters for coloring
+      const solutionArr = solution.split('');
+      const result = Array(WORD_LENGTH).fill('absent');
+      const used = Array(WORD_LENGTH).fill(false);
+
+      // mark correct first
+      for(let i=0;i<WORD_LENGTH;i++){
+        if(guess[i] === solutionArr[i]){ result[i]='correct'; used[i]=true; }
+      }
+      // then present
+      for(let i=0;i<WORD_LENGTH;i++){
+        if(result[i] === 'correct') continue;
+        for(let j=0;j<WORD_LENGTH;j++){
+          if(!used[j] && guess[i] === solutionArr[j]){ result[i]='present'; used[j]=true; break; }
+        }
+      }
+
+      // apply styles and update keyboard
+      for(let i=0;i<WORD_LENGTH;i++){
+        tiles[i].classList.add(result[i]);
+        tiles[i].setAttribute('aria-label', `${tiles[i].textContent} ${result[i]}`);
+      }
+      updateKeyboard(guess, result);
+
+      attempts++;
+      guesses.push({guess, result});
+      updateAttemptsLeft();
+
+      if(guess === solution){
+        showMessage(`You win! The word was ${solution.toUpperCase()}.`);
+        attempts = maxAttempts; // lock
+        return;
+      }
+
+      if(attempts >= maxAttempts){
+        showMessage(`Game over. The word was ${solution.toUpperCase()}.`);
+        return;
+      }
+
+      showMessage('Keep trying.');
+    }
+
+    function updateKeyboard(guess, result){
+      for(let i=0;i<guess.length;i++){
+        const k = guess[i];
+        const btn = keyboardEl.querySelector(`[data-key='${k}']`);
+        if(!btn) continue;
+        // priority: correct > present > absent
+        if(result[i] === 'correct') btn.className = 'kkey correct';
+        else if(result[i] === 'present' && btn.className.indexOf('correct')===-1) btn.className = 'kkey present';
+        else if(result[i] === 'absent' && btn.className.indexOf('correct')===-1 && btn.className.indexOf('present')===-1) btn.className = 'kkey absent';
+      }
+    }
+
+    // keyboard events
+    document.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter') handleKey('Enter');
+      else if(e.key === 'Backspace') handleKey('Backspace');
+      else if(/^[a-zA-Z]$/.test(e.key)) handleKey(e.key);
+    });
+
+    // New game flow
+    function startNewGame(){
+      maxAttempts = parseInt(attemptsInput.value,10) || 6;
+      if(maxAttempts < 1) maxAttempts = 1;
+      attempts = 0; guesses = [];
+      solution = pickRandomWord();
+      createGrid(); createKeyboard(); updateAttemptsLeft(); wordLenEl.textContent = WORD_LENGTH;
+      showMessage('Type a 5-letter guess and press Enter.');
+      console.log('Solution:', solution);
+    }
+
+    newGameBtn.addEventListener('click', startNewGame);
+    revealBtn.addEventListener('click', ()=>{
+      showToast(`Solution: ${solution.toUpperCase()}`, 3000);
+    });
+
+    shareBtn.addEventListener('click', ()=>{
+      // build simple share string like Wordle
+      let lines = [];
+      lines.push(`Wordle-Clone ${attempts}/${maxAttempts}`);
+      for(const g of guesses){
+        const row = g.result.map(r => r === 'correct' ? '🟩' : r === 'present' ? '🟨' : '⬛').join('');
+        lines.push(row);
+      }
+      const text = lines.join('\n');
+      navigator.clipboard?.writeText(text).then(()=> showToast('Result copied to clipboard'), ()=> showToast('Copy failed'));
+    });
+
+    // initial setup
+    startNewGame();
+  </script>
+</body>
+</html>
